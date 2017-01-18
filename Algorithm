@@ -1,0 +1,278 @@
+import cvxopt
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+
+desired_width = 320
+pd.set_option('display.width', desired_width)
+symbols = ['SPY', 'GOOG', 'AMZN', 'HRB']
+years = mdates.YearLocator()
+months = mdates.MonthLocator()
+days = mdates.DayLocator()
+YMFmt = mdates.DateFormatter('%b%Y')
+windows = 20
+risk_free = 1.0075**(1/252)-1
+# Read in generalized financial files
+
+
+def open_vdata():
+    dfs = pd.read_csv('http://www.google.com/finance/historical?q=NYSEARCA%3ASPY&ei=FH51WNnfHIuumgGqp5W4CA&output=csv',
+                      usecols=['Date', 'Close', 'Volume'])
+    dfg = pd.read_csv('http://www.google.com/finance/historical?q=NASDAQ%3AGOOG&ei=joF1WIH6Ac6xmAHCjpHIDQ&output=csv',
+                      usecols=['Date', 'Close', 'Volume'])
+    dfa = pd.read_csv('http://www.google.com/finance/historical?q=NASDAQ%3AAMZN&ei=nIJ1WNmUNYWjmAGP0o-oDg&output=csv',
+                      usecols=['Date', 'Close', 'Volume'])
+    dfh = pd.read_csv('http://www.google.com/finance/historical?q=NYSE%3AHRB&ei=BoN1WOHEMoK-mAHvpL_IBw&output=csv',
+                      usecols=['Date', 'Close', 'Volume'])
+# clean data
+    dfs.iloc[0:, 0] = pd.to_datetime(dfs.iloc[0:, 0], infer_datetime_format=True)
+    dfg.iloc[0:, 0] = pd.to_datetime(dfg.iloc[0:, 0], infer_datetime_format=True)
+    dfa.iloc[0:, 0] = pd.to_datetime(dfa.iloc[0:, 0], infer_datetime_format=True)
+    dfh.iloc[0:, 0] = pd.to_datetime(dfh.iloc[0:, 0], infer_datetime_format=True)
+    dfs = dfs.rename(columns={'Close':'SPY', 'Volume': 'SPY Volume'})
+    dfg = dfg.rename(columns={'Close': 'GOOG', 'Volume': 'GOOG Volume'})
+    dfa = dfa.rename(columns={'Close': 'AMZN', 'Volume': 'AMZN Volume'})
+    dfh = dfh.rename(columns={'Close': 'HRB', 'Volume': 'HRB Volume'})
+
+    dfs.set_index(dfs['Date'], inplace=True)
+    del dfs['Date']
+    dfs = dfs.sort_index()
+    dfs = dfs.reset_index()
+
+    dfg.set_index(dfg['Date'], inplace=True)
+    del dfg['Date']
+    dfg = dfg.sort_index()
+    dfg = dfg.reset_index()
+
+    dfa.set_index(dfa['Date'], inplace=True)
+    del dfa['Date']
+    dfa = dfa.sort_index()
+    dfa = dfa.reset_index()
+
+    dfh.set_index(dfh['Date'], inplace=True)
+    del dfh['Date']
+    dfh = dfh.sort_index()
+    dfh = dfh.reset_index()
+# Merge data
+    df_temp = pd.merge(dfs, dfg, on='Date', how='inner')
+    df_temp = pd.merge(df_temp, dfa, on='Date', how='inner')
+    df_temp = pd.merge(df_temp, dfh, on='Date', how='inner')
+    return df_temp
+
+
+def get_data():
+    df_temp = open_vdata()
+    for symbol in symbols:
+        R = '{}'.format(symbol)
+        del df_temp[R + ' Volume']
+    return df_temp
+
+#calculate useful stock info and build dataframe accordingly
+def mu():
+    df_temp = open_vdata()
+    for symbol in symbols:
+        mu = df_temp['{}'.format(symbol)].mean()
+        df_temp['{} Mean Close'.format(symbol)] = mu
+    return df_temp
+
+
+def vol_mean():
+    df_temp = mu()
+    for symbol in symbols:
+        vol_mu = df_temp['{} Volume'.format(symbol)].mean()
+        df_temp['{} Mean Volume'.format(symbol)] = vol_mu
+    return df_temp
+
+
+def get_bands(window):
+    df_temp = get_data()
+    for symbol in symbols:
+        R = '{}'.format(symbol)
+        df_temp['RM_' + R] = df_temp['{}'.format(symbol)].rolling(window=window).mean()
+        df_temp['RM_' + R] = df_temp['RM_' + R].fillna(method='bfill')
+        df_temp['Rstd_' + R] = df_temp['{}'.format(symbol)].rolling(window=window).std()
+        df_temp['Rstd_' + R] = df_temp['Rstd_' + R].fillna(method='bfill')
+        df_temp['Upper Band_' + R] = df_temp['RM_' + R] + df_temp['Rstd_' + R] * 2
+        df_temp['Lower Band_' + R] = df_temp['RM_' + R] - df_temp['Rstd_' + R] * 2
+    return df_temp
+
+def norm_bands(window):
+    df_temp = get_bands(window)
+    for symbol in symbols:
+        R = '{}'.format(symbol)
+        df_temp['norm_SMA'] = (df_temp['RM_' + R] - df_temp['RM_' + R].mean()) / df_temp['RM_' + R].std()
+        df_temp['norm_upper'] = (df_temp['Upper Band_' + R] - df_temp['Upper Band_' + R].mean())\
+                                / df_temp['Upper Band_' + R].std()
+        df_temp['norm_lower'] = (df_temp['Lower Band_' + R] - df_temp['Lower Band_' + R].mean()) \
+                                / df_temp['Lower Band_' + R].std()
+    return df_temp
+
+
+
+def get_daily_returns():
+    df_temp = get_data()
+    df_temp['Daily Returns SPY'] = (df_temp.iloc[1:, 1] / df_temp.iloc[:-1, 1].values) - 1
+    df_temp['Daily Returns GOOG'] = (df_temp.iloc[1:, 2] / df_temp.iloc[:-1, 2].values) - 1
+    df_temp['Daily Returns AMZN'] = (df_temp.iloc[1:, 3] / df_temp.iloc[:-1, 3].values) - 1
+    df_temp['Daily Returns HRB'] = (df_temp.iloc[1:, 4] / df_temp.iloc[:-1, 4].values) - 1
+    df_temp.iloc[0, 5:] = 0
+    return df_temp
+
+
+def get_sharpe():
+    df_temp = get_daily_returns()
+    for symbol in symbols:
+        R = '{}'.format(symbol)
+        df_temp['dr_rf' + R] = (df_temp['Daily Returns ' + R] - risk_free)
+        df_temp['Sharpe ' + R] = (df_temp['dr_rf' + R].mean() / df_temp['dr_rf' + R].std()) * (252)**(1/2)
+        del df_temp['dr_rf' + R]
+    return df_temp
+
+get_sharpe()
+def get_momentum(t, n, symbol):
+    df_temp = get_data()
+    dict = {'SPY': 1, 'GOOG': 2, 'AMZN': 3, 'HRB': 4}
+    C = dict[symbol]
+    momentum = (df_temp.iloc[t, C] / df_temp.iloc[t-n, C]) - 1
+    print(momentum)
+
+
+def get_pe():
+    df = get_daily_returns()
+    for symbol in symbols:
+        R = '{}'.format(symbol)
+        df['P/E ' + R] = df[R].mean() / df['Daily Returns ' + R].sum()
+    return df
+
+
+'''def norm_pe():
+    df = get_pe()           # Need multiple years to calculate
+    for symbol in symbols:
+        R = '{}'.format(symbol)
+        df['norm_pe ' + R] = (df['P/E ' + R] - df['P/E ' + R].mean()) / df['P/E ' + R].std()
+    print(df)
+
+norm_pe()'''
+
+
+def weighted_portfolio():
+    df = get_daily_returns()
+    df_returns = df.iloc[:, 5:]
+    C = np.cov(df_returns.T)
+    k = np.random.rand(len(df_returns.T))
+    w = np.asmatrix(k/sum(k))
+    sigma = np.sqrt(w * C * w.T)
+    P = np.asmatrix(np.mean(df_returns))
+    R = w * P.T
+    print(R, sigma)
+
+
+weighted_portfolio()
+#Plots
+def Price(x):
+    return '$%1.2f' %x
+
+def plot_prices():
+    df_temp = vol_mean()
+    dfd = df_temp['Date']
+    fig, ax = plt.subplots()
+    for symbol in symbols:
+        df = df_temp['{}'.format(symbol)]
+        label = '{}'.format(symbol)
+        ax.plot(dfd, df, label=label)
+    ax.xaxis.set_major_locator(months)
+    ax.xaxis.set_major_formatter(YMFmt)
+    ax.xaxis.set_minor_locator(days)
+    ax.format_xdata = mdates.DateFormatter('%Y-%m-%d')
+    ax.format_ydata = Price
+    ax.grid(True)
+    fig.autofmt_xdate()
+    ax.legend()
+    ax.set_title('Stock Prices')
+    plt.show()
+
+def plot_norm_prices():
+    df_temp = vol_mean()
+    dfd = df_temp['Date']
+    df_temp = df_temp.iloc[0:, 1:4]/ df_temp.iloc[0, 1:4]
+    fig, ax = plt.subplots()
+    for symbol in symbols:
+        df = df_temp['{}'.format(symbol)]
+        label = '{}'.format(symbol)
+        ax.plot(dfd, df, label=label)
+    ax.xaxis.set_major_locator(months)
+    ax.xaxis.set_major_formatter(YMFmt)
+    ax.xaxis.set_minor_locator(days)
+    ax.format_xdata = mdates.DateFormatter('%Y-%m-%d')
+    ax.format_ydata = Price
+    ax.grid(True)
+    fig.autofmt_xdate()
+    ax.legend(loc='upper left')
+    ax.set_title('Normalized Prices')
+    plt.show()
+
+
+def plot_bands(symbol, window):
+    df_temp = get_bands(window)
+    dfd = df_temp['Date']
+    fig, ax = plt.subplots()
+    df = df_temp[symbol]
+    du = df_temp['Upper Band_' + symbol]
+    dl = df_temp['Lower Band_' + symbol]
+    ax.plot(dfd, df, 'r', label=symbol)
+    ax.plot(dfd, du, 'b', label='Upper')
+    ax.plot(dfd, dl, 'b', label='Lower')
+    ax.xaxis.set_major_locator(months)
+    ax.xaxis.set_major_formatter(YMFmt)
+    ax.xaxis.set_minor_locator(days)
+    ax.format_xdata = mdates.DateFormatter('%Y-%m-%d')
+    ax.format_ydata = Price
+    ax.grid(True)
+    fig.autofmt_xdate()
+    ax.legend(loc='upper left')
+    ax.set_title('Bollinger Bands')
+    plt.show()
+
+
+#def plot_norm_bands(symbol, window):
+
+
+def hist_daily_returns(symbol, bins):
+    df_temp = get_daily_returns()
+    df_temp['Daily Returns_' + symbol].plot(kind='hist', title=symbol, bins=bins)
+    plt.show()
+
+
+
+# build individual learners
+# polynomial regression
+# KNN
+#
+
+
+
+
+# compile to ensemble learner
+
+
+
+
+# bootstrap
+
+
+
+
+# boost
+
+
+
+
+
+# Qlearn
+
+
+
+
+
+#Dyna
